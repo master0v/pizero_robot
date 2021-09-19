@@ -9,7 +9,7 @@ After=network.target
 [Service]
 Type=simple
 #Restart=always
-User=pi
+User=root
 WorkingDirectory=/home/pi/src/pizero_robot
 ExecStart=/home/pi/src/pizero_robot/pizero_robot.py
 
