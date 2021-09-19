@@ -1,0 +1,17 @@
+# sudo pico /etc/systemd/system/pizero_robot.service
+# sudo systemctl daemon-reload && sudo systemctl enable pizero_robot.service
+# sudo systemctl start pizero_robot.service && sudo journalctl -f -u pizero_robot.service
+
+[Unit]
+Description=@pizero_robot
+After=network.target
+
+[Service]
+Type=simple
+#Restart=always
+User=pi
+WorkingDirectory=/home/pi/src/pizero_robot
+ExecStart=/home/pi/src/pizero_robot/pizero_robot.py
+
+[Install]
+WantedBy=multi-user.target
