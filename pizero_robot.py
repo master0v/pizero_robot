@@ -8,9 +8,12 @@ from subprocess import check_output
 import telegram
 
 import logging
-logging.basicConfig(format='%(name)-8s: %(levelname)-6s %(message)s') # %(asctime)-10s 
+logging.basicConfig(format='%(name)-8s: %(levelname)-6s %(message)s') # %(asctime)-10s
+logger = logging.getLogger('telegram.bot')
+logger.setLevel(logging.INFO)
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
+
 
 import telegram_token
 from ledControl import ledControl
@@ -22,12 +25,12 @@ lc.redColorWipe()
 # get ip address
 attempt = 0
 while True:
-  logger.debug("Getting the IP using 'ifconfig' (attempt {attempt})")
+  logger.debug(f"Getting the IP using 'ifconfig' (attempt {attempt})")
   wlan0 = str(check_output(["ifconfig", "wlan0"]))
   matches = re.findall(r'inet \d+[.]\d+[.]\d+[.]\d+', wlan0) 
   if matches:
     ip = matches[0].split()[1]
-    logger.debug(f" got {ip}")
+    logger.debug(f" - got {ip}")
     break
   elif attempt > 10:
     ip = "Can't get ip"
@@ -37,7 +40,7 @@ while True:
 lc.blueColorWipe()
 
 # send it to telegram
-logger.debug("sending '{ip}' to telegram (attempt {attempt})")
+logger.debug(f"sending '{ip}' to Telegram")
 bot = telegram.Bot(token=telegram_token.BOT_TOKEN)
 try:
   bot.send_message(chat_id=telegram_token.CHAT_ID, text=f"RaspiTank got IP {ip}")
@@ -57,5 +60,5 @@ signal.signal(signal.SIGINT, exit_gracefully) # stop-sigterm
 signal.signal(signal.SIGTERM, exit_gracefully)
 
 while True:
-  logger.info(".")
+  logger.debug(".")
   sleep(10)
