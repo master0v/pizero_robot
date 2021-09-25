@@ -134,12 +134,12 @@ def move(speed, direction, turn, radius=0.6):   # 0 < radius <= 1
 def forward():
   speed = 100
   motor_left(1, left_forward, speed)
-  motor_right(1, right_forward, speed)
+  motor_right(1, right_forward, speed*0.3)
   
   
 def backwards():
   speed = 100
-  motor_left(1, left_backward, speed)
+  motor_left(1, left_backward, speed*0.3)
   motor_right(1, right_backward, speed)
   
   
