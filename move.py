@@ -131,6 +131,38 @@ def move(speed, direction, turn, radius=0.6):   # 0 < radius <= 1
 		pass
 
 
+def forward():
+  speed = 100
+  motor_left(1, left_forward, speed)
+  motor_right(1, right_forward, speed)
+  
+  
+def backwards():
+  speed = 100
+  motor_left(1, left_backward, speed)
+  motor_right(1, right_backward, speed)
+  
+  
+def spinAround():
+  speed = 100
+  motor_left(1, left_backward, speed)
+  motor_right(1, right_forward, speed)
+  time.sleep(1.5)
+  motorStop()
+  
+def turn90degreesRight():
+  speed = 100
+  motor_left(1, left_backward, speed)
+  motor_right(1, right_forward, speed)
+  time.sleep(0.75)
+  motorStop()
+  
+def turn90degreesLeft():
+  speed = 100
+  motor_left(1, left_forward, speed)
+  motor_right(1, right_backward, speed)
+  time.sleep(0.75)
+  motorStop()
 
 
 def destroy():
@@ -143,7 +175,7 @@ if __name__ == '__main__':
     speed_set = 25
     setup()
     #move(speed_set, 'backward', 'yes', 0.8)
-    move(speed_set, 'forward', 'yes', 0.8)
+    move(speed_set, 'forward', 'left', 0.8)
     time.sleep(1)
     motorStop()
     destroy()
