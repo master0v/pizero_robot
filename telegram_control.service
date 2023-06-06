@@ -1,0 +1,14 @@
+[Unit]
+Description=@telegram_control
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+User=root
+WorkingDirectory=/home/pi/src/pizero_robot
+ExecStart=/home/pi/src/pizero_robot/telegram_control.py
+
+[Install]
+WantedBy=multi-user.target
+

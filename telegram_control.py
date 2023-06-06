@@ -38,13 +38,13 @@ async def send_welcome(message: types.Message):
 async def echo(message: types.Message):
     # old style:
     # await bot.send_message(message.chat.id, message.text)
-    if message.text == "red":
+    if message.text.lower() == "red":
       lc.redColorWipe()
-    elif message.text == "green":
+    elif message.text.lower() == "green":
       lc.greenColorWipe()
-    elif message.text == "blue":
+    elif message.text.lower() == "blue":
       lc.blueColorWipe()
-    elif message.text == "off":
+    elif message.text.lower() == "off":
       lc.wipeClean()
     else:
       await message.answer("'" + message.text +
