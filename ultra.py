@@ -1,46 +1,69 @@
-#!/usr/bin/python3
-# File name   : Ultrasonic.py
-# Description : Detection distance and tracking with ultrasonic
-# Website     : www.gewbot.com
-# Author      : William
-# Date        : 2019/02/23
+#!/usr/bin/env python3
+"""
+ultra.py
+
+HC-SR04 reader: single init, monotonic timing, timeouts, and clean exit.
+"""
+
 import RPi.GPIO as GPIO
 import time
 
-Tr = 11 # transmitter attached to pin 11?
-Ec = 8  # receiver attache to pin 8
+# GPIO pins (BCM numbering)
+TRIG = 11
+ECHO = 8
 
+# How long to wait for the echo (seconds); ~0.05s ⇒ max ~8.5 m
+TIMEOUT = 0.05
 
-def initUltrasonicSensor():
-  #GPIO.setwarnings(False)
-  GPIO.setmode(GPIO.BCM)
-  GPIO.setup(Tr, GPIO.OUT,initial=GPIO.LOW)
-  GPIO.setup(Ec, GPIO.IN)
+def init_sensor():
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(TRIG, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(ECHO, GPIO.IN)
+    # let sensor settle
+    time.sleep(0.1)
 
+def get_distance(timeout: float = TIMEOUT) -> float | None:
+    """
+    Send a 10 µs pulse on TRIG, measure flight time on ECHO.
+    Returns:
+        distance in metres, or None if no echo within `timeout`.
+    """
+    # 1) Trigger pulse
+    GPIO.output(TRIG, GPIO.HIGH)
+    time.sleep(10e-6)
+    GPIO.output(TRIG, GPIO.LOW)
 
-#Read the distance using ultrasonic time of flight
-def getDistance():
-    
-  initUltrasonicSensor()
-  
-  # send a pulse
-  GPIO.output(Tr, GPIO.HIGH)
-  time.sleep(0.000015)
-  GPIO.output(Tr, GPIO.LOW)
-  
-  # measure the time between the high and the low
-  while not GPIO.input(Ec):
-      pass
-  t1 = time.time()
-  while GPIO.input(Ec):
-      pass
-  t2 = time.time()
-  
-  # return the distance derived from flight time
-  return round((t2-t1)*340/2,2)
+    # 2) Wait for ECHO to go HIGH
+    t_start = time.monotonic()
+    while GPIO.input(ECHO) == 0:
+        if time.monotonic() - t_start >= timeout:
+            return None
+    t0 = time.monotonic()
 
+    # 3) Wait for ECHO to go LOW
+    while GPIO.input(ECHO) == 1:
+        if time.monotonic() - t0 >= timeout:
+            return None
+    t1 = time.monotonic()
 
-if __name__ == '__main__':
-    while 1:
-        print(getDistance())
-        time.sleep(1)
+    # 4) Compute distance (v_sound ≈ 343 m/s)
+    return (t1 - t0) * 343.0 / 2.0
+
+def main():
+    init_sensor()
+    try:
+        while True:
+            dist = get_distance()
+            if dist is None:
+                print("Out of range")
+            else:
+                print(f"{dist:.2f} m")
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+    finally:
+        GPIO.cleanup()
+
+if __name__ == "__main__":
+    main()
