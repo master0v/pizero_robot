@@ -2,10 +2,11 @@
 
 # 1. install aiogram 3.0
 # pip install -U --pre aiogram
+# pip3 install rpi_ws281x
 
 # 2. run with sudo
 
-import telegram_token # telegram_token.BOT_TOKEN
+import os
 import ledControl
 lc=ledControl.ledControl()
 lc.blueColorWipe()
@@ -15,13 +16,13 @@ import logging
 
 from aiogram import Bot, Dispatcher, executor, types
 
-API_TOKEN = 'BOT TOKEN HERE'
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
 # Initialize bot and dispatcher
-bot = Bot(token=telegram_token.BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
 

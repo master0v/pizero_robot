@@ -9,7 +9,7 @@ from adafruit_motor import servo
 # New bounds and step size
 MIN_ANGLE = 30
 MAX_ANGLE = 90
-STEP = 1       # degrees per keypress
+STEP = 5       # degrees per keypress
 CHANNEL = 11   # PCA9685 channel
 
 def servo_control(stdscr):

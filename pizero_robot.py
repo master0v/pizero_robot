@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 #  -*- coding: utf-8 -*-
 
+# pip3 install telegram
+
 from time import sleep
 import signal
 import re
@@ -15,7 +17,11 @@ logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 
 
-import telegram_token
+import os
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+
 from ledControl import ledControl
 
 logger.debug("Turning on LED")
@@ -41,9 +47,9 @@ lc.blueColorWipe()
 
 # send it to telegram
 logger.debug(f"sending '{ip}' to Telegram")
-bot = telegram.Bot(token=telegram_token.BOT_TOKEN)
+bot = telegram.Bot(token=BOT_TOKEN)
 try:
-  bot.send_message(chat_id=telegram_token.CHAT_ID, text=f"RaspiTank got IP {ip}")
+  bot.send_message(chat_id=CHAT_ID, text=f"RaspiTank got IP {ip}")
 except Exception as e:
   logger.warning(f"Can't send to telegram: {e}")
 
