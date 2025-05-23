@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-ultra_cam.py
+ultra_servo_cam.py
 
-Live PiCamera2 → Tkinter video with ultrasonic overlay.
+Live PiCamera2 → Tkinter video with:
+  - ultrasonic distance overlay
+  - crosshair
+  - servo angle overlay
+  - Up/Down keys to drive a PCA9685-driven servo
 """
-
 import os
 # ── suppress libcamera INFO/WARN (only ERROR+ appear) ──
 os.environ["LIBCAMERA_LOG_LEVELS"]  = "ERROR"
@@ -20,8 +23,20 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont
 from picamera2 import Picamera2
 
+import board
+import busio
+from adafruit_pca9685 import PCA9685
+from adafruit_motor import servo
+
 # ────────────────────────────────────────────────────────
-# Graceful shutdown
+# Servo configuration
+MIN_ANGLE = 30
+MAX_ANGLE = 90
+STEP      = 5       # degrees per keypress
+CHANNEL   = 11      # PCA9685 channel
+
+# ────────────────────────────────────────────────────────
+# Graceful shutdown flag
 _stop = False
 def _on_sigint(signum, frame):
     global _stop
@@ -31,39 +46,77 @@ signal.signal(signal.SIGINT,  _on_sigint)
 signal.signal(signal.SIGTERM, _on_sigint)
 
 def main():
-    # 1) initialize your ultrasonic GPIO once
+    # 1) init ultrasonic
     ultra.init_sensor()
 
-    # 2) camera setup
+    # 2) init servo
+    i2c = busio.I2C(board.SCL, board.SDA)
+    pca = PCA9685(i2c)
+    pca.frequency = 50
+    my_servo = servo.Servo(
+        pca.channels[CHANNEL],
+        min_pulse=500, max_pulse=2500
+    )
+    angle = MAX_ANGLE
+    my_servo.angle = angle
+
+    # 3) setup Picamera2 → RGB888!
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(main={
-        "format": "XRGB8888",
+        "format": "RGB888",     # ← now 3-byte RGB
         "size":   (640, 480)
     })
     picam2.configure(config)
     picam2.start()
 
-    # 3) Tkinter window
+    # 4) setup Tkinter
     root = tk.Tk()
-    root.title("UltraCam")
+    root.title("UltraCam + Servo Control")
+    root.focus_force()
     canvas = tk.Canvas(root, width=640, height=480)
     canvas.pack()
 
-    # 4) preload font
+    # preload font
     font = ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24
     )
+
+    def on_key(event):
+        nonlocal angle
+        key = event.keysym
+        if key == 'Up':
+            new = max(angle - STEP, MIN_ANGLE)
+        elif key == 'Down':
+            new = min(angle + STEP, MAX_ANGLE)
+        elif key in ('q', 'Q'):
+            cleanup()
+            root.quit()
+            return
+        else:
+            return
+
+        if new != angle:
+            angle = new
+            my_servo.angle = angle
+
+    root.bind("<Key>", on_key)
+
+    def cleanup():
+        my_servo.angle = None
+        pca.deinit()
+        picam2.stop()
+        picam2.close()
+        GPIO.cleanup()
 
     def update_frame():
         if _stop:
-            root.destroy()
+            cleanup()
+            root.quit()
             return
 
-        # grab a frame
-        frame = picam2.capture_array("main")  # H×W×4
-
-        # build PIL image & draw
-        img = Image.fromarray(frame[:, :, :3])
+        # grab frame as true RGB
+        frame = picam2.capture_array("main")  # shape H×W×3 in RGB
+        img = Image.fromarray(frame, mode="RGB")
         draw = ImageDraw.Draw(img)
         w, h = img.size
         cx, cy, L = w // 2, h // 2, 20
@@ -73,31 +126,31 @@ def main():
         draw.line([(cx-L, cy), (cx+L, cy)], fill=col, width=3)
         draw.line([(cx, cy-L), (cx, cy+L)], fill=col, width=3)
 
-        # distance
-        dist = ultra.get_distance()  # metres or None
-        txt = "Out of range" if dist is None else f"{dist:.2f} m"
-        x0, y0, x1, y1 = draw.textbbox((0, 0), txt, font=font)
-        tw, th = x1 - x0, y1 - y0
-        draw.text(((w - tw) / 2, cy + L + 10), txt, font=font, fill=col)
+        # ultrasonic distance
+        dist = ultra.get_distance()
+        dist_txt = "Out of range" if dist is None else f"{dist:.2f} m"
+        x0, y0, x1, y1 = draw.textbbox((0,0), dist_txt, font=font)
+        tw, th = x1-x0, y1-y0
+        draw.text(((w-tw)/2, cy+L+10), dist_txt, font=font, fill=col)
 
-        # convert to PPM and feed to Tk
+        # servo angle only (no instructions)
+        angle_txt = f"[↑:↓:Q] Servo: {angle:.1f}°"
+        draw.text((10, 10), angle_txt, font=font, fill=col)
+
+        # render to Tk
         buf = io.BytesIO()
         img.save(buf, format="PPM")
-        img_data = buf.getvalue()
-        tkimg = tk.PhotoImage(data=img_data)
-
+        tkimg = tk.PhotoImage(data=buf.getvalue())
         canvas.create_image(0, 0, anchor="nw", image=tkimg)
-        canvas.img = tkimg  # keep ref
+        canvas.img = tkimg
 
-        root.after(100, update_frame)  # ~10 Hz
+        root.after(100, update_frame)
 
     root.after(0, update_frame)
     root.mainloop()
 
-    # teardown
-    picam2.stop()
-    picam2.close()
-    GPIO.cleanup()
+    if not _stop:
+        cleanup()
 
 if __name__ == "__main__":
     main()
