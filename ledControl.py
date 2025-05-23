@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/aim/myenv/bin/python
 #  -*- coding: utf-8 -*-
 # from https://github.com/rpi-ws281x/rpi-ws281x-python/tree/master/examples
 # pip3 install rpi_ws281x
