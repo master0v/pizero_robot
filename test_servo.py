@@ -6,21 +6,21 @@ import curses
 from adafruit_pca9685 import PCA9685
 from adafruit_motor import servo
 
-# Bounds and step size
-MIN_ANGLE = 28
+# New bounds and step size
+MIN_ANGLE = 30
 MAX_ANGLE = 90
-STEP = 1    # degrees per keypress
-CHANNEL = 11
+STEP = 1       # degrees per keypress
+CHANNEL = 11   # PCA9685 channel
 
 def servo_control(stdscr):
     # --- curses setup ---
-    curses.noecho()            # don’t echo pressed keys
-    curses.cbreak()            # react to keys instantly
-    stdscr.keypad(True)        # capture special keys
-    stdscr.nodelay(True)       # non-blocking getch()
+    curses.noecho()
+    curses.cbreak()
+    stdscr.keypad(True)
+    stdscr.nodelay(True)
     stdscr.clear()
     stdscr.addstr(0, 0,
-        f"Use ↑/↓ to move servo between {MIN_ANGLE}° and {MAX_ANGLE}°, 'q' to quit."
+        f"Use ↑ to DECREASE and ↓ to INCREASE angle between {MIN_ANGLE}° and {MAX_ANGLE}°, 'q' to quit."
     )
     stdscr.refresh()
 
@@ -35,7 +35,7 @@ def servo_control(stdscr):
     )
 
     # start at the lower bound
-    angle = MIN_ANGLE
+    angle = MAX_ANGLE
     my_servo.angle = angle
     stdscr.addstr(2, 0, f"Angle: {angle:.1f}°   ")
     stdscr.refresh()
@@ -44,9 +44,11 @@ def servo_control(stdscr):
         while True:
             key = stdscr.getch()
             if key == curses.KEY_UP:
-                new = min(angle + STEP, MAX_ANGLE)
-            elif key == curses.KEY_DOWN:
+                # reversed: up arrow now DECREASES angle
                 new = max(angle - STEP, MIN_ANGLE)
+            elif key == curses.KEY_DOWN:
+                # down arrow now INCREASES angle
+                new = min(angle + STEP, MAX_ANGLE)
             elif key in (ord('q'), ord('Q')):
                 break
             else:
@@ -58,19 +60,18 @@ def servo_control(stdscr):
                 stdscr.addstr(2, 0, f"Angle: {angle:.1f}°   ")
                 stdscr.refresh()
 
-            # small delay so we don't hammer the CPU
-            time.sleep(0.05)
+            time.sleep(0.05)  # small delay to reduce CPU load
 
     except KeyboardInterrupt:
         pass
 
     finally:
-        # restore terminal
+        # Clean up curses
         curses.nocbreak()
         stdscr.keypad(False)
         curses.echo()
         curses.endwin()
-        # detach servo & power down PCA9685
+        # Detach servo & power down PCA9685
         my_servo.angle = None
         pca.deinit()
         print("Exited. Servo detached and PCA9685 shut down.")
