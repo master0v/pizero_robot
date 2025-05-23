@@ -1,40 +1,53 @@
 #!/usr/bin/env python3
 # File name   : control.py
-# Description : Keyboard-driven motor control
-# Author      : You
+# Description : Keyboard-driven motor control (hold buttons)
 # Date        : 2025/05/23
 
 import time
 import curses
 import move        # our motor library
 
-# default speed (0–100)
-SPEED = 50
+# default drive speed (0–100)
+SPEED = 80
 
 def control_loop(stdscr):
-    """Curses-based real-time keyboard control."""
-    stdscr.nodelay(True)
-    stdscr.keypad(True)
+    """Curses-based real-time WASD control."""
+    stdscr.nodelay(True)        # non-blocking getch()
+    stdscr.keypad(True)         # enable special keys
     stdscr.clear()
     stdscr.addstr(0, 0,
-        "Arrows: ↑↓←→  Space: stop  Q: quit", curses.A_BOLD)
+        "W=↑ forward   S=↓ backward   A=← left   D=→ right   Q=quit",
+        curses.A_BOLD
+    )
 
     try:
         while True:
             key = stdscr.getch()
-            if key == curses.KEY_UP:
-                move.move(SPEED, 'forward', 'no')
-            elif key == curses.KEY_DOWN:
-                move.move(SPEED, 'backward', 'no')
-            elif key == curses.KEY_LEFT:
-                move.move(SPEED, 'no', 'left')
-            elif key == curses.KEY_RIGHT:
-                move.move(SPEED, 'no', 'right')
-            elif key == ord(' ') or key == ord('s'):
-                move.motorStop()
-            elif key in (ord('q'), ord('Q')):
+
+            # quit?
+            if key in (ord('q'), ord('Q')):
                 break
+
+            # movement only while key is down
+            elif key in (ord('w'), ord('W')):
+                move.move(SPEED, 'forward', 'no')
+
+            elif key in (ord('s'), ord('S')):
+                move.move(SPEED, 'backward', 'no')
+
+            elif key in (ord('a'), ord('A')):
+                move.move(SPEED, 'no', 'left')
+
+            elif key in (ord('d'), ord('D')):
+                move.move(SPEED, 'no', 'right')
+
+            # no relevant key → stop motors
+            else:
+                move.motorStop()
+
+            # small delay for responsiveness
             time.sleep(0.05)
+
     except KeyboardInterrupt:
         pass
 
