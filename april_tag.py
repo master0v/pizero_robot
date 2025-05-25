@@ -1,187 +1,122 @@
 #!/usr/bin/env python3
-
-# REQUIREMENTS:
-# sudo apt install python3-opencv
-# pip3 install apriltag
-
 """
-ultra_servo_apriltag.py
+april_tag_detect.py
 
-Live PiCamera2 → Tkinter video with:
-  - ultrasonic distance overlay
-  - crosshair
-  - servo angle overlay
-  - real-time AprilTag detection and ID overlay
-  - Up/Down keys to drive a PCA9685-driven servo
+Live PiCamera2 → OpenCV preview with real-time AprilTag detection
+(using pupil_apriltags) and full console output of each tag’s data.
 """
 
 import os
-# suppress libcamera INFO/WARN (only ERROR+ appear)
+# suppress libcamera INFO/WARN
 os.environ["LIBCAMERA_LOG_LEVELS"]  = "ERROR"
 os.environ["LIBCAMERA_LOG_NO_COLOR"] = "1"
 
 import signal
 import time
-import io
-
-import ultra                # your ultra.py (must define init_sensor & get_distance)
-import RPi.GPIO as GPIO
-import tkinter as tk
-from PIL import Image, ImageDraw, ImageFont
-from picamera2 import Picamera2
-
-import board
-import busio
-from adafruit_pca9685 import PCA9685
-from adafruit_motor import servo
-
-import cv2
 import numpy as np
-import apriltag
-
-# ────────────────────────────────────────────────────────
-# Servo configuration
-MIN_ANGLE = 30
-MAX_ANGLE = 90
-STEP      = 5       # degrees per keypress
-CHANNEL   = 11      # PCA9685 channel
-
-# ────────────────────────────────────────────────────────
-# Graceful shutdown flag
-_stop = False
-def _on_sigint(signum, frame):
-    global _stop
-    _stop = True
-
-signal.signal(signal.SIGINT,  _on_sigint)
-signal.signal(signal.SIGTERM, _on_sigint)
+import cv2
+from picamera2 import Picamera2
+from pupil_apriltags import Detector
 
 def main():
-    # 1) init ultrasonic
-    ultra.init_sensor()
-
-    # 2) init servo
-    i2c = busio.I2C(board.SCL, board.SDA)
-    pca = PCA9685(i2c)
-    pca.frequency = 50
-    my_servo = servo.Servo(
-        pca.channels[CHANNEL],
-        min_pulse=500, max_pulse=2500
-    )
-    angle = MAX_ANGLE
-    my_servo.angle = angle
-
-    # 3) setup Picamera2 → RGB888 but we’ll swap to real RGB below
+    # ——— 1) Initialize PiCamera2 ————————————————
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(main={
-        "format": "RGB888",     # actually comes out BGR
+        "format": "RGB888",    # 3‐byte RGB
         "size":   (640, 480)
     })
     picam2.configure(config)
     picam2.start()
 
-    # 4) setup AprilTag detector
-    detector = apriltag.Detector()
-
-    # 5) setup Tkinter
-    root = tk.Tk()
-    root.title("UltraCam + Servo + AprilTag")
-    root.focus_force()
-    canvas = tk.Canvas(root, width=640, height=480)
-    canvas.pack()
-
-    # preload font
-    font = ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24
+    # ——— 2) Initialize AprilTag detector —————————
+    detector = Detector(
+        families="tag36h11",
+        nthreads=1,
+        quad_decimate=1.0,
+        quad_sigma=0.0,
+        refine_edges=1,
+        decode_sharpening=0.25,
+        debug=0
     )
 
-    def on_key(event):
-        nonlocal angle
-        key = event.keysym
-        if key == 'Up':
-            new = max(angle - STEP, MIN_ANGLE)
-        elif key == 'Down':
-            new = min(angle + STEP, MAX_ANGLE)
-        elif key in ('q', 'Q'):
-            cleanup()
-            root.quit()
-            return
-        else:
-            return
-
-        if new != angle:
-            angle = new
-            my_servo.angle = angle
-
-    root.bind("<Key>", on_key)
-
-    def cleanup():
-        my_servo.angle = None
-        pca.deinit()
+    def shutdown(signum, frame):
         picam2.stop()
         picam2.close()
-        GPIO.cleanup()
+        cv2.destroyAllWindows()
+        exit(0)
 
-    def update_frame():
-        if _stop:
-            cleanup()
-            root.quit()
-            return
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
 
-        # 1) grab frame as true RGB via swap
-        frame = picam2.capture_array("main")        # B, G, R
-        frame = frame[..., ::-1]                    # swap → R, G, B
-        img = Image.fromarray(frame, mode="RGB")
-        draw = ImageDraw.Draw(img)
-        w, h = img.size
-        cx, cy, L = w // 2, h // 2, 20
-        col = (255, 0, 0, 255)
+    print("Starting AprilTag detection. Press Ctrl-C or 'q' in the window to quit.")
 
-        # 2) crosshair
-        draw.line([(cx-L, cy), (cx+L, cy)], fill=col, width=3)
-        draw.line([(cx, cy-L), (cx, cy+L)], fill=col, width=3)
+    while True:
+        # — Capture frame as RGB array ——————————
+        frame = picam2.capture_array("main")  # shape=(480,640,3), channels=R,G,B
 
-        # 3) ultrasonic distance
-        dist = ultra.get_distance()
-        dist_txt = "Out of range" if dist is None else f"{dist:.2f} m"
-        x0, y0, x1, y1 = draw.textbbox((0,0), dist_txt, font=font)
-        tw, th = x1-x0, y1-y0
-        draw.text(((w-tw)/2, cy+L+10), dist_txt, font=font, fill=col)
-
-        # 4) AprilTag detection
+        # — Convert to grayscale for detection —————
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        detections = detector.detect(gray)
+
+        # — Detect AprilTags ————————————————
+        detections = detector.detect(
+            gray,
+            estimate_tag_pose=False,
+            camera_params=None,
+            tag_size=None
+        )
+        # (returns list of Detection objects with attributes: 
+        #  tag_family, tag_id, hamming, decision_margin, center, corners, homography, pose_R, pose_t, pose_err) 
+
+        # — Draw overlays & print data ——————————
+        disp = frame.copy()
         for det in detections:
-            # corners is 4×2 array:  (top-left, top-right, bottom-right, bottom-left)
-            pts = det.corners.astype(int).reshape((4,2))
-            # draw polygon
+            # 1) Draw polygon around tag
+            corners = det.corners.astype(int)
             for i in range(4):
-                pt1 = tuple(pts[i])
-                pt2 = tuple(pts[(i+1)%4])
-                draw.line([pt1, pt2], fill=(0,255,0,255), width=3)
-            # draw the tag ID at its center
-            cx_tag, cy_tag = int(det.center[0]), int(det.center[1])
-            draw.text((cx_tag+5, cy_tag+5), str(det.tag_id),
-                      font=font, fill=(0,255,0,255))
+                pt1 = tuple(corners[i])
+                pt2 = tuple(corners[(i+1)%4])
+                # disp is RGB; OpenCV wants BGR, but green (0,255,0) works both ways
+                cv2.line(disp, pt1, pt2, (0,255,0), 2)
 
-        # 5) servo angle text
-        angle_txt = f"[↑:↓:Q] Servo: {angle:.1f}°"
-        draw.text((10, 10), angle_txt, font=font, fill=col)
+            # 2) Draw tag ID text
+            cx, cy = int(det.center[0]), int(det.center[1])
+            cv2.putText(disp, str(det.tag_id), (cx+5, cy-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
 
-        # 6) render to Tk
-        buf = io.BytesIO()
-        img.save(buf, format="PPM")
-        tkimg = tk.PhotoImage(data=buf.getvalue())
-        canvas.create_image(0, 0, anchor="nw", image=tkimg)
-        canvas.img = tkimg
+            # 3) Print every relevant field to the console
+            print("— AprilTag Detected —")
+            print(f"tag_id:         {det.tag_id}")
+            print(f"tag_family:     {det.tag_family}")
+            print(f"hamming:        {det.hamming}")
+            print(f"decision_margin:{det.decision_margin:.3f}")
+            print(f"center:         ({det.center[0]:.1f}, {det.center[1]:.1f})")
+            print("corners:")
+            for i, (x, y) in enumerate(det.corners):
+                print(f"  corner {i}:   ({x:.1f}, {y:.1f})")
+            print("homography:")
+            print(det.homography)
+            # optional pose fields (only if estimate_tag_pose=True)
+            if hasattr(det, "pose_R") and det.pose_R is not None:
+                print("pose_R:")
+                print(det.pose_R)
+            if hasattr(det, "pose_t") and det.pose_t is not None:
+                print("pose_t:")
+                print(det.pose_t)
+            if hasattr(det, "pose_err") and det.pose_err is not None:
+                print(f"pose_err:       {det.pose_err:.3f}")
+            print()
 
-        root.after(100, update_frame)
+        # — Show live window ———————————————
+        # convert RGB→BGR for display
+        disp_bgr = cv2.cvtColor(disp, cv2.COLOR_RGB2BGR)
+        cv2.imshow("AprilTag Detection", disp_bgr)
 
-    root.after(0, update_frame)
-    root.mainloop()
+        # exit on 'q'
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            shutdown(None, None)
 
-    if not _stop:
-        cleanup()
+        # throttle loop a bit
+        time.sleep(3)
 
 if __name__ == "__main__":
     main()
