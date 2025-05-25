@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/home/aim/myenv/bin/python
 
 # 1. install aiogram 3.0
 # pip install -U --pre aiogram
@@ -6,7 +6,7 @@
 
 # 2. run with sudo
 
-import os
+import os, sys
 import ledControl
 lc=ledControl.ledControl()
 lc.blueColorWipe()
@@ -20,6 +20,9 @@ from aiogram import Bot, Dispatcher, executor, types
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if (BOT_TOKEN is None):
+  print("run 'sudo -E ./telegram_control.py' to preserve TELEGRAM_BOT_TOKEN environmental variable")
+  sys.exit(1)
 
 # Initialize bot and dispatcher
 bot = Bot(token=BOT_TOKEN)
