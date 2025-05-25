@@ -63,7 +63,7 @@ def main():
     # 3) setup Picamera2 → RGB888!
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(main={
-        "format": "RGB888",     # ← now 3-byte RGB
+        "format": "BGR888",     # → yields [R, G, B] order
         "size":   (640, 480)
     })
     picam2.configure(config)
