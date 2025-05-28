@@ -49,27 +49,22 @@ log = logging.getLogger("robot")
 
 
 def safe_json(payload: bytes) -> dict:
-    """Parse JSON payload or return empty dict on failure."""
     try:
         return json.loads(payload.decode('utf-8'))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+    except Exception as e:
         log.error("Invalid JSON payload: %s", e)
         return {}
 
 
 class RobotController:
     def __init__(self):
-        # ─── CAMERA SETUP ────────────────────────────────────────────────
+        # Camera init & lock exposure
         self.picam2 = Picamera2()
-        still_conf = self.picam2.create_still_configuration(
-            main={"size": Config.RES, "format": "RGB888"}
-        )
-        self.picam2.configure(still_conf)
-
-        # lock exposure/gain
+        conf = self.picam2.create_still_configuration(main={"size": Config.RES, "format": "RGB888"})
+        self.picam2.configure(conf)
         self.picam2.start(); time.sleep(2.0)
         req = self.picam2.capture_request(); md = req.get_metadata()
-        exp, gain = int(md.get("ExposureTime",0)), md.get("AnalogueGain",1.0)
+        exp, gain = int(md.get("ExposureTime", 0)), md.get("AnalogueGain", 1.0)
         req.release(); self.picam2.stop()
         self.picam2.set_controls({
             "AwbEnable": False,
@@ -78,40 +73,53 @@ class RobotController:
         })
         log.info("Camera locked EX=%dµs, AG=%.2f", exp, gain)
 
-        # ─── HARDWARE SETUP ─────────────────────────────────────────────
+        # Hardware init
         self.lc = ledControl()
         move.setup()
         ultra.init_sensor()
+
         i2c = busio.I2C(board.SCL, board.SDA)
-        self.pca = PCA9685(i2c); self.pca.frequency = 50
+        self.pca = PCA9685(i2c)
+        self.pca.frequency = 50
         self.servo = ServoModule.Servo(
             self.pca.channels[Config.SERVO_CHANNEL],
             min_pulse=500, max_pulse=2500
         )
-        log.info("Servo ready on channel %d (angles %d–%d°)",
+        log.info("Servo on channel %d (angles %d–%d°)",
                  Config.SERVO_CHANNEL, Config.SERVO_MIN, Config.SERVO_MAX)
 
-        # ─── MQTT SETUP ──────────────────────────────────────────────────
+        # MQTT setup
         self.client = mqtt.Client()
         self.client.will_set(
             Config.TOPIC_STATUS,
-            json.dumps({"status":"offline"}), qos=1, retain=True
+            json.dumps({"status":"offline"}),
+            qos=1, retain=True
         )
         self.client.on_connect    = self.on_connect
         self.client.on_message    = self.on_message
         self.client.on_disconnect = self.on_disconnect
 
     def on_connect(self, client, userdata, flags, rc):
-        log.info("Connected (rc=%s)", rc)
-        for t in (Config.TOPIC_IMG_REQ, Config.TOPIC_LED,
-                  Config.TOPIC_MOVE, Config.TOPIC_DIST_REQ,
-                  Config.TOPIC_SERVO):
-            client.subscribe(t); log.debug("Subscribed to '%s'", t)
-        client.publish(Config.TOPIC_STATUS,
-                       json.dumps({"status":"online"}), qos=1, retain=True)
+        log.info("Connected to MQTT broker (rc=%s)", rc)
+        for topic in (
+            Config.TOPIC_IMG_REQ,
+            Config.TOPIC_LED,
+            Config.TOPIC_MOVE,
+            Config.TOPIC_DIST_REQ,
+            Config.TOPIC_SERVO
+        ):
+            client.subscribe(topic)
+            log.debug("Subscribed to '%s'", topic)
+
+        # announce online
+        client.publish(
+            Config.TOPIC_STATUS,
+            json.dumps({"status":"online"}),
+            qos=1, retain=True
+        )
 
     def on_disconnect(self, client, userdata, rc):
-        log.warning("Disconnected (rc=%s)", rc)
+        log.warning("MQTT disconnected (rc=%s)", rc)
 
     def on_message(self, client, userdata, msg):
         log.debug("on_message: topic=%s payload=%s", msg.topic, msg.payload)
@@ -131,7 +139,8 @@ class RobotController:
     def handle_image_request(self):
         log.debug("handle_image_request()")
         try:
-            self.picam2.start(); time.sleep(0.05)
+            self.picam2.start()
+            time.sleep(0.05)
             frame = self.picam2.capture_array("main")
             self.picam2.stop()
 
@@ -140,7 +149,8 @@ class RobotController:
                 [int(cv2.IMWRITE_JPEG_QUALITY), Config.JPEG_QUAL]
             )
             if not ret:
-                log.error("JPEG encoding failed"); return
+                log.error("JPEG encoding failed")
+                return
 
             jpg = buf.tobytes()
             payload = json.dumps({
@@ -151,102 +161,107 @@ class RobotController:
             log.info("Published image (%d bytes)", len(jpg))
 
         except Exception as e:
-            log.error("Image request error: %s", e, exc_info=True)
+            log.error("Error in handle_image_request: %s", e, exc_info=True)
 
     def handle_led(self, msg):
-        log.debug("handle_led: %s", msg.payload)
+        log.debug("handle_led payload=%s", msg.payload)
         p = safe_json(msg.payload)
-        cmd, wait = p.get("cmd","").lower(), int(p.get("wait_ms",50))
+        cmd = p.get("cmd", "").lower()
+        wait = int(p.get("wait_ms", 50))
         try:
-            if   cmd=="red":      self.lc.redColorWipe(wait)
-            elif cmd=="green":    self.lc.greenColorWipe(wait)
-            elif cmd=="blue":     self.lc.blueColorWipe(wait)
-            elif cmd=="wipeclean":self.lc.wipeClean()
-            elif cmd=="rainbow":  self.lc.rainbow(self.lc.strip,wait,iterations=1)
-            elif cmd=="rainbowcycle": self.lc.rainbowCycle(self.lc.strip,wait,iterations=1)
-            elif cmd=="theaterchase": self.lc.theaterChase(self.lc.strip,wait_ms=wait,iterations=5)
-            elif cmd=="theaterchaserainbow": self.lc.theaterChaseRainbow(self.lc.strip,wait_ms=wait)
+            if   cmd == "red":     self.lc.redColorWipe(wait)
+            elif cmd == "green":   self.lc.greenColorWipe(wait)
+            elif cmd == "blue":    self.lc.blueColorWipe(wait)
+            elif cmd == "wipeclean":   self.lc.wipeClean()
+            elif cmd == "rainbow":     self.lc.rainbow(self.lc.strip, wait, iterations=1)
+            elif cmd == "rainbowcycle":self.lc.rainbowCycle(self.lc.strip, wait, iterations=1)
+            elif cmd == "theaterchase":   self.lc.theaterChase(self.lc.strip, wait_ms=wait, iterations=5)
+            elif cmd == "theaterchaserainbow": self.lc.theaterChaseRainbow(self.lc.strip, wait_ms=wait)
             else:
-                log.warning("Unknown LED cmd '%s'",cmd); return
-            log.info("LED %s", cmd)
+                log.warning("Unknown LED cmd '%s'", cmd)
+                return
+            log.info("Executed LED cmd '%s'", cmd)
         except Exception as e:
-            log.error("LED error: %s", e, exc_info=True)
+            log.error("LED handler error: %s", e, exc_info=True)
 
     def handle_move(self, msg):
         """
-        Drive motors via JSON {left,right,[duration]}.  left/right
-        values are swapped here to match wiring, and if no duration,
-        runs until a zero command arrives.
+        Drive motors with exactly the server’s values.
+        JSON: { "left":<int>, "right":<int>, [ "duration":<secs> ] }.
         """
-        log.debug("handle_move payload: %s", msg.payload)
-        p      = safe_json(msg.payload)
-        left   = int(p.get("left",0))
-        right  = int(p.get("right",0))
-        dur    = p.get("duration", None)
-        log.debug("Parsed move: left=%d right=%d duration=%s", left, right, dur)
+        log.debug("handle_move payload=%s", msg.payload)
+        p = safe_json(msg.payload)
+        left = int(p.get("left", 0))
+        right = int(p.get("right", 0))
+        dur = p.get("duration", None)
+        log.debug("Parsed move → left=%d right=%d duration=%s", left, right, dur)
 
-        # swap left/right
-        actual_left, actual_right = right, left
         try:
-            move.drive(actual_left, actual_right)
-            log.info("Driving (swapped) L=%d%% R=%d%%%s",
-                     actual_left, actual_right,
+            move.drive(left, right)
+            log.info("Driving L=%d%% R=%d%%%s", left, right,
                      f" for {dur:.2f}s" if dur else "")
-            if dur and dur>0:
-                log.debug("Scheduling auto-stop in %.2fs", dur)
+            if dur is not None and dur > 0:
                 threading.Timer(dur,
-                                lambda: (move.drive(0,0),
-                                         log.info("Auto-stopped"))).start()
+                                lambda: (move.drive(0, 0),
+                                         log.info("Auto-stopped motors"))).start()
         except Exception as e:
-            log.error("Move error: %s", e, exc_info=True)
+            log.error("Move handler error: %s", e, exc_info=True)
 
     def handle_distance_request(self):
         log.debug("handle_distance_request()")
         try:
-            d = ultra.get_distance()
-            payload = json.dumps({"timestamp":time.time(),"distance_m":d})
+            dist = ultra.get_distance()
+            payload = json.dumps({
+                "timestamp": time.time(),
+                "distance_m": dist
+            })
             self.client.publish(Config.TOPIC_DIST, payload, qos=1)
-            log.info("Distance %s", d)
+            log.info("Published distance: %s", dist)
         except Exception as e:
-            log.error("Distance error: %s", e, exc_info=True)
+            log.error("Distance handler error: %s", e, exc_info=True)
 
     def handle_servo(self, msg):
-        log.debug("handle_servo: %s", msg.payload)
+        log.debug("handle_servo payload=%s", msg.payload)
         p = safe_json(msg.payload)
-        angle = float(p.get("angle",Config.SERVO_MIN))
+        angle = float(p.get("angle", Config.SERVO_MIN))
         angle = max(Config.SERVO_MIN, min(Config.SERVO_MAX, angle))
         try:
             self.servo.angle = angle
-            log.info("Servo %.1f°", angle)
+            log.info("Servo angle set to %.1f°", angle)
         except Exception as e:
-            log.error("Servo error: %s", e, exc_info=True)
+            log.error("Servo handler error: %s", e, exc_info=True)
 
     def shutdown(self):
         log.info("Shutting down…")
         try:
-            self.client.loop_stop(); self.client.disconnect()
-        except: pass
+            self.client.loop_stop()
+            self.client.disconnect()
+        except Exception as e:
+            log.error("MQTT shutdown error: %s", e, exc_info=True)
+
         try: move.destroy()
         except: pass
         try: self.pca.deinit()
         except: pass
         try: ultra.GPIO.cleanup()
         except: pass
+
         log.info("Clean exit")
 
 
 def main():
-    rc = RobotController()
-    rc.client.connect(Config.BROKER, Config.PORT, keepalive=60)
-    rc.client.loop_start()
-    log.info("MQTT loop started…")
+    controller = RobotController()
+    controller.client.connect(Config.BROKER, Config.PORT, keepalive=60)
+    controller.client.loop_start()
+    log.info("MQTT loop started, awaiting commands…")
+
     try:
         while True:
-            time.sleep(1)
+            time.sleep(1.0)
     except KeyboardInterrupt:
-        rc.shutdown()
+        controller.shutdown()
         sys.exit(0)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
