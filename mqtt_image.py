@@ -6,63 +6,95 @@ import cv2
 from picamera2 import Picamera2
 import paho.mqtt.client as mqtt
 
-# ─── CONFIG ───────────────────────────────────────────────────────────────────
-BROKER    = "192.168.0.31"     # your MQTT broker
-PORT      = 1883
-TOPIC_IMG = "robot/image"      # topic where images are published
-FPS       = 1                  # frames per second
-RES       = (640, 480)         # lower resolution to save bandwidth & CPU
-JPEG_QUAL = 30                 # JPEG quality (0–100)
+# ─── CONFIG ────────────────────────────────────────────────────────────────────
+BROKER        = "192.168.0.31"
+PORT          = 1883
+TOPIC_REQUEST = "robot/image/request"
+TOPIC_IMAGE   = "robot/image"
+RES           = (640, 480)
+JPEG_QUAL     = 40
 
-# ─── SETUP MQTT ───────────────────────────────────────────────────────────────
-mqtt_client = mqtt.Client()
-mqtt_client.connect(BROKER, PORT)
-mqtt_client.loop_start()
-
-# ─── SETUP CAMERA ─────────────────────────────────────────────────────────────
+# ─── SETUP CAMERA ──────────────────────────────────────────────────────────────
 picam2 = Picamera2()
-video_conf = picam2.create_video_configuration(
-    main={"size": RES, "format": "BGR888"}
+
+# 1) Prepare a still‐capture pipeline
+still_conf = picam2.create_still_configuration(
+    main={"size": RES, "format": "RGB888"}
 )
-picam2.configure(video_conf)
+picam2.configure(still_conf)
+
+# 2) Start once, warm up auto‐exposure & white‐balance
 picam2.start()
-time.sleep(2)  # allow sensor to warm up
+time.sleep(2.0)
 
-print(f"Streaming {FPS} FPS @ {RES[0]}×{RES[1]} to {BROKER}:{PORT}/{TOPIC_IMG}")
+# 3) Grab one request to read the chosen AE/WB settings
+req = picam2.capture_request()
+md  = req.get_metadata()
+# these keys may vary by firmware—inspect `md` if these fail:
+exposure_time = int(md.get("ExposureTime", 0))
+analogue_gain = md.get("AnalogueGain", 1.0)
+req.release()
+
+# 4) Stop the pipeline and switch to manual controls
+picam2.stop()
+picam2.set_controls({
+    "AwbEnable": False,
+    "ExposureTime": exposure_time,
+    "AnalogueGain": analogue_gain
+})
+print(f"[INFO] Locked EX={exposure_time}µs, AG={analogue_gain:.2f}")
+
+# ─── MQTT CALLBACKS ───────────────────────────────────────────────────────────
+def on_connect(client, userdata, flags, rc):
+    client.subscribe(TOPIC_REQUEST)
+    print(f"[INFO] MQTT connected; subscribed to '{TOPIC_REQUEST}'")
+
+def on_message(client, userdata, msg):
+    if msg.topic != TOPIC_REQUEST:
+        return
+
+    # 1) start pipeline just for this shot
+    picam2.start()
+    # a very short pause to let the controls take effect
+    time.sleep(0.05)
+
+    # 2) capture
+    frame = picam2.capture_array("main")
+
+    # 3) stop immediately
+    picam2.stop()
+
+    # 4) JPEG encode
+    ret, buf = cv2.imencode('.jpg', frame,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUAL])
+    if not ret:
+        print("[WARN] JPEG encode failed")
+        return
+
+    # 5) package & publish
+    jpg_bytes = buf.tobytes()
+    payload = json.dumps({
+        "timestamp": time.time(),
+        "image_b64": base64.b64encode(jpg_bytes).decode('ascii')
+    })
+    client.publish(TOPIC_IMAGE, payload)
+    print(f"[{time.time():.3f}] Published frame ({len(jpg_bytes)} bytes)")
+
+# ─── MAIN ─────────────────────────────────────────────────────────────────────
+mqtt_client = mqtt.Client()
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+
+mqtt_client.connect(BROKER, PORT, keepalive=60)
+mqtt_client.loop_start()
+print("[INFO] MQTT loop running; idle until requests come in…")
+
 try:
-    interval = 1.0 / FPS
     while True:
-        t0 = time.time()
-        ts = time.time()
-
-        # capture a frame (XRGB → BGR)
-        frame = picam2.capture_array("main")
-        bgr   = frame[:, :, 2::-1]
-
-        # JPEG-encode
-        ret, buf = cv2.imencode('.jpg', bgr, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUAL])
-        jpg_bytes = buf.tobytes()
-        jpg_b64   = base64.b64encode(jpg_bytes).decode('ascii')
-
-        # build JSON payload
-        payload = json.dumps({
-            "timestamp": ts,
-            "image_b64": jpg_b64
-        })
-
-        # publish
-        mqtt_client.publish(TOPIC_IMG, payload)
-        print(f"[{ts:.3f}] sent {len(jpg_bytes)}-byte JPEG")
-
-        # maintain target FPS
-        dt = time.time() - t0
-        if dt < interval:
-            time.sleep(interval - dt)
-
+        time.sleep(1)
 except KeyboardInterrupt:
-    print("\nStopping stream…")
-
+    print("[INFO] Shutting down…")
 finally:
     mqtt_client.loop_stop()
     mqtt_client.disconnect()
-    picam2.stop()
+    print("[INFO] Clean exit")
