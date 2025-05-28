@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 # File name   : control.py
-# Description : Keyboard-driven motor control (hold buttons)
-# Date        : 2025/05/23
+# Description : Curses-driven WASD control (no sudo needed)
+# Date        : 2025/05/28
 
 import time
 import curses
-import move        # our motor library
+import move        # your refactored move.py
 
-# default drive speed (0–100)
-SPEED = 80
+# full-power range is –100…+100
+SPEED = 100
+
+# direct key→(L, R)
+KEY_MAP = {
+    ord('w'): ( SPEED,  SPEED),
+    ord('s'): (-SPEED, -SPEED),
+    ord('a'): ( SPEED, -SPEED),
+    ord('d'): (-SPEED,  SPEED),
+}
 
 def control_loop(stdscr):
-    """Curses-based real-time WASD control."""
-    stdscr.nodelay(True)        # non-blocking getch()
-    stdscr.keypad(True)         # enable special keys
+    curses.cbreak()           # no Enter needed
+    stdscr.nodelay(True)      # non‐blocking getch()
+    stdscr.keypad(True)
     stdscr.clear()
     stdscr.addstr(0, 0,
-        "W=↑ forward   S=↓ backward   A=← left   D=→ right   Q=quit",
+        "Hold W/A/S/D to move, release to stop, CTRL-C=quit",
         curses.A_BOLD
     )
 
@@ -24,30 +32,14 @@ def control_loop(stdscr):
         while True:
             key = stdscr.getch()
 
-            # quit?
-            if key in (ord('q'), ord('Q')):
-                break
+            left, right = KEY_MAP.get(key, (0, 0))
+            move.drive(left, right)
 
-            # movement only while key is down
-            elif key in (ord('w'), ord('W')):
-                move.move(SPEED, 'forward', 'no')
+            stdscr.addstr(1, 0, f"L={left:>4}  R={right:>4}")
+            stdscr.clrtoeol()
+            stdscr.refresh()
 
-            elif key in (ord('s'), ord('S')):
-                move.move(SPEED, 'backward', 'no')
-
-            elif key in (ord('a'), ord('A')):
-                move.move(SPEED, 'no', 'left')
-
-            elif key in (ord('d'), ord('D')):
-                move.move(SPEED, 'no', 'right')
-
-            # no relevant key → stop motors
-            else:
-                move.motorStop()
-
-            # small delay for responsiveness
-            time.sleep(0.05)
-
+            time.sleep(0.1)   # 10 ms loop
     except KeyboardInterrupt:
         pass
 
