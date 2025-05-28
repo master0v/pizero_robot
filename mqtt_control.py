@@ -24,7 +24,7 @@ class Config:
     PORT          = 1883
 
     RES           = (640, 480)
-    JPEG_QUAL     = 40
+    JPEG_QUAL     = 60
 
     TOPIC_IMG_REQ = "robot/image/request"
     TOPIC_IMG     = "robot/image"
