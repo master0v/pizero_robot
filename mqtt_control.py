@@ -5,6 +5,7 @@ import time
 import json
 import base64
 import logging
+import threading
 
 import cv2
 import paho.mqtt.client as mqtt
@@ -37,7 +38,6 @@ class Config:
     SERVO_CHANNEL = 11
     SERVO_MIN     = 30
     SERVO_MAX     = 90
-
 
 # ─── Logging Setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -100,7 +100,6 @@ class RobotController:
 
         # ─── MQTT SETUP ──────────────────────────────────────────────────
         self.client = mqtt.Client()
-        # Last Will & Testament: mark offline on unexpected disconnect
         self.client.will_set(
             Config.TOPIC_STATUS,
             json.dumps({"status": "offline"}),
@@ -118,7 +117,6 @@ class RobotController:
         ):
             client.subscribe(topic)
             log.info("Subscribed to '%s'", topic)
-        # publish online status
         client.publish(
             Config.TOPIC_STATUS,
             json.dumps({"status": "online"}),
@@ -190,14 +188,25 @@ class RobotController:
             log.error("LED handler error: %s", e, exc_info=True)
 
     def handle_move(self, msg: mqtt.MQTTMessage) -> None:
-        """Drive motors via JSON {left, right} percentages."""
-        p     = safe_json(msg.payload)
-        left  = int(p.get("left", 0))
-        right = int(p.get("right", 0))
+        """
+        Drive motors via JSON {left: int, right: int, [duration]: float}.
+        If 'duration' is provided (seconds), auto-stop after that interval.
+        """
+        p      = safe_json(msg.payload)
+        left   = int(p.get("left", 0))
+        right  = int(p.get("right", 0))
+        dur    = p.get("duration", None)
 
         try:
             move.drive(left, right)
-            log.info("Driving L=%d%%, R=%d%%", left, right)
+            log.info("Driving L=%d%%, R=%d%%%s",
+                     left, right,
+                     f" for {dur:.2f}s" if dur else "")
+            if dur is not None and dur > 0:
+                # schedule an automatic stop
+                threading.Timer(dur,
+                                lambda: (move.drive(0, 0),
+                                         log.info("Auto-stopped motors"))).start()
         except Exception as e:
             log.error("Move handler error: %s", e, exc_info=True)
 
@@ -215,7 +224,7 @@ class RobotController:
             log.error("Distance handler error: %s", e, exc_info=True)
 
     def handle_servo(self, msg: mqtt.MQTTMessage) -> None:
-        """Set servo angle via JSON {angle} (clamped)."""
+        """Set servo angle via JSON {angle: float} (clamped)."""
         p     = safe_json(msg.payload)
         angle = float(p.get("angle", Config.SERVO_MIN))
         angle = max(Config.SERVO_MIN, min(Config.SERVO_MAX, angle))
