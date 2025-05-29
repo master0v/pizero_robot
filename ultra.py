@@ -41,7 +41,7 @@ def read_temperature_celsius() -> float:
     Stub for ambient temperature reading.
     Replace this with your own sensor code (e.g. DHT22, DS18B20).
     """
-    return 20.0  # assume 20 °C if no sensor attached
+    return 24.4  # assume 24.4 °C / 76 F if no sensor attached
 
 def get_distance(timeout: float = TIMEOUT) -> float | None:
     """
