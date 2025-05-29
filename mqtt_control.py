@@ -210,7 +210,7 @@ class RobotController:
     def handle_distance_request(self):
         log.debug("handle_distance_request()")
         try:
-            dist = ultra.get_distance()
+            dist = ultra.get_filtered_distance()
             payload = json.dumps({
                 "timestamp": time.time(),
                 "distance_m": dist
