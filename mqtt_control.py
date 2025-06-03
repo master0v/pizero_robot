@@ -34,6 +34,7 @@ class Config:
     TOPIC_DIST       = "robot/distance"
     TOPIC_SERVO      = "robot/servo"
     TOPIC_STATUS     = "robot/status"
+    TOPIC_MOVE_COMPLETE = "robot/move/complete"
 
     # New calibration topic:
     TOPIC_CAM_CALIB  = "robot/camera/calibrate"
@@ -139,7 +140,7 @@ class RobotController:
             Config.TOPIC_DIST_REQ,
             Config.TOPIC_SERVO,
             Config.TOPIC_CAM_CALIB,
-            Config.TOPIC_HEARTBEAT
+            Config.TOPIC_MOVE_COMPLETE
         ):
             client.subscribe(topic)
             log.debug("Subscribed to '%s'", topic)
@@ -222,29 +223,33 @@ class RobotController:
             log.info("Executed LED cmd '%s'", cmd)
         except Exception as e:
             log.error("LED handler error: %s", e, exc_info=True)
+            
+# ================================================================================================
 
     def handle_move(self, msg):
-        """
-        Drive motors with exactly the server’s values.
-        JSON: { "left":<int>, "right":<int>, [ "duration":<secs> ] }.
-        """
         log.debug("handle_move payload=%s", msg.payload)
         p = safe_json(msg.payload)
-        left = int(p.get("left", 0))
+        left  = int(p.get("left", 0))
         right = int(p.get("right", 0))
-        dur = p.get("duration", None)
-        log.debug("Parsed move → left=%d right=%d duration=%s", left, right, dur)
+        dur   = p.get("duration", None)
 
-        try:
-            move.drive(left, right)
-            log.info("Driving L=%d%% R=%d%%%s", left, right,
-                     f" for {dur:.2f}s" if dur else "")
-            if dur is not None and dur > 0:
-                threading.Timer(dur,
-                                lambda: (move.drive(0, 0),
-                                         log.info("Auto-stopped motors"))).start()
-        except Exception as e:
-            log.error("Move handler error: %s", e, exc_info=True)
+        move.drive(left, right)
+        log.info("Driving L=%d%% R=%d%%%s", left, right,
+                 f" for {dur:.2f}s" if dur else "")
+
+        if dur is not None and dur > 0:
+            def stop_and_notify():
+                move.drive(0, 0)
+                log.info("Auto-stopped motors")
+                # Notify server that move is complete:
+                payload = json.dumps({"timestamp": time.time()})
+                self.client.publish(Config.TOPIC_MOVE_COMPLETE, payload)
+                log.debug("Published move complete")
+
+            threading.Timer(dur, stop_and_notify).start()
+    
+            
+# ================================================================================================
 
     def handle_distance_request(self):
         log.debug("handle_distance_request()")

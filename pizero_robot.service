@@ -12,8 +12,8 @@ Wants=network-online.target
 Type=simple
 #Restart=always
 User=root
-WorkingDirectory=/home/pi/src/pizero_robot
-ExecStart=/home/pi/src/pizero_robot/pizero_robot.py
+WorkingDirectory=/home/aim/src/pizero_robot
+ExecStart=/home/aim/src/pizero_robot/mqtt_control.py
 
 [Install]
 WantedBy=multi-user.target
