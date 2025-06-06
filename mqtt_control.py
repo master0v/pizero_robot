@@ -184,8 +184,7 @@ class RobotController:
             Config.TOPIC_MOVE,
             Config.TOPIC_DIST_REQ,
             Config.TOPIC_SERVO,
-            Config.TOPIC_CAM_CALIB,
-            Config.TOPIC_MOVE_COMPLETE
+            Config.TOPIC_CAM_CALIB
         ):
             client.subscribe(topic)
             log.debug("Subscribed to '%s'", topic)
