@@ -1,4 +1,5 @@
 #!/home/aim/myenv/bin/python
+# -*- coding: utf-8 -*-
 
 import sys
 import time
@@ -19,6 +20,7 @@ from ledControl import ledControl
 import move
 import ultra
 
+# ================================================================================================
 class Config:
     BROKER           = "192.168.0.31"
     PORT             = 1883
@@ -46,7 +48,8 @@ class Config:
     SERVO_MIN        = 30
     SERVO_MAX        = 90
 
-# ─── Logging Setup ─────────────────────────────────────────────────────────────
+# ================================================================================================
+# ─── Logging Setup ───────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.DEBUG,
     format='[%(asctime)s] [%(name)s] %(levelname)s: %(message)s',
@@ -54,18 +57,20 @@ logging.basicConfig(
 )
 log = logging.getLogger("robot")
 
-
+# ================================================================================================
 def safe_json(payload: bytes) -> dict:
+    """Decode a UTF‑8 JSON payload safely and return {} on failure."""
     try:
         return json.loads(payload.decode('utf-8'))
     except Exception as e:
         log.error("Invalid JSON payload: %s", e)
         return {}
 
-
+# ================================================================================================
 class RobotController:
+    # --------------------------------------------------------------------------------------------
     def __init__(self):
-        # ─── INITIAL CAMERA WB/AE LOCK ──────────────────────────────────────────
+        # ─── INITIAL CAMERA WB/AE LOCK ──────────────────────────────────────────────────────────
         self.picam2 = Picamera2()
         conf = self.picam2.create_still_configuration(main={"size": Config.RES, "format": "RGB888"})
         self.picam2.configure(conf)
@@ -86,8 +91,6 @@ class RobotController:
         self.analog_gain = gain
 
         # 4) Disable AWB & AE by explicitly setting ExposureTime and AnalogueGain
-        #    (Note: “AeEnable” is not supported on this stack, so we clear AE by overriding
-        #     ExposureTime/Gain manually rather than using a dedicated toggle.)
         self.picam2.set_controls({
             "AwbEnable": False,
             "ExposureTime": self.exp_time,
@@ -130,6 +133,48 @@ class RobotController:
         )
         self.heartbeat_thread.start()
 
+    # ============================================================================================
+    # Utility helpers (no more code duplication!)
+    # --------------------------------------------------------------------------------------------
+    def capture_image_b64(self) -> str | None:
+        """
+        Capture a JPEG image, encode it as base64 ASCII, and return the string.
+        Returns None on any error.
+        """
+        try:
+            self.picam2.start()
+            time.sleep(0.05)
+            frame = self.picam2.capture_array("main")
+            self.picam2.stop()
+
+            ok, buf = cv2.imencode(
+                '.jpg', frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), Config.JPEG_QUAL]
+            )
+            if not ok:
+                raise RuntimeError("JPEG encoding failed")
+
+            return base64.b64encode(buf.tobytes()).decode('ascii')
+
+        except Exception as e:
+            log.error("capture_image_b64 error: %s", e, exc_info=True)
+            return None
+
+    # --------------------------------------------------------------------------------------------
+    def get_distance_m(self) -> float | None:
+        """
+        Read the filtered ultrasonic distance (in metres).
+        Returns None if the sensor fails.
+        """
+        try:
+            return ultra.get_filtered_distance()
+        except Exception as e:
+            log.error("get_distance_m error: %s", e, exc_info=True)
+            return None
+
+    # ============================================================================================
+    # MQTT callbacks
+    # --------------------------------------------------------------------------------------------
     def on_connect(self, client, userdata, flags, rc):
         log.info("Connected to MQTT broker (rc=%s)", rc)
         # Subscribe to all topics, including calibration and heartbeat
@@ -152,9 +197,11 @@ class RobotController:
             qos=1, retain=True
         )
 
+    # --------------------------------------------------------------------------------------------
     def on_disconnect(self, client, userdata, rc):
         log.warning("MQTT disconnected (rc=%s)", rc)
 
+    # --------------------------------------------------------------------------------------------
     def on_message(self, client, userdata, msg):
         log.debug("on_message: topic=%s payload=%s", msg.topic, msg.payload)
         if msg.topic == Config.TOPIC_IMG_REQ:
@@ -168,40 +215,30 @@ class RobotController:
         elif msg.topic == Config.TOPIC_SERVO:
             self.handle_servo(msg)
         elif msg.topic == Config.TOPIC_HEARTBEAT:
-            # No action needed here; the server just tracks that we published.
-            pass
+            pass  # Server just tracks that we published.
         elif msg.topic == Config.TOPIC_CAM_CALIB:
             self.handle_camera_calibration()
         else:
             log.warning("Unhandled topic '%s'", msg.topic)
 
+    # ============================================================================================
+    # Handlers
+    # --------------------------------------------------------------------------------------------
     def handle_image_request(self):
         log.debug("handle_image_request()")
-        try:
-            self.picam2.start()
-            time.sleep(0.05)
-            frame = self.picam2.capture_array("main")
-            self.picam2.stop()
+        image_b64 = self.capture_image_b64()
+        if image_b64 is None:
+            log.error("Image capture failed – not publishing")
+            return
 
-            ret, buf = cv2.imencode(
-                '.jpg', frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), Config.JPEG_QUAL]
-            )
-            if not ret:
-                log.error("JPEG encoding failed")
-                return
+        payload = json.dumps({
+            "timestamp": time.time(),
+            "image_b64": image_b64
+        })
+        self.client.publish(Config.TOPIC_IMG, payload)
+        log.info("Published image (%d B)", len(image_b64))
 
-            jpg = buf.tobytes()
-            payload = json.dumps({
-                "timestamp": time.time(),
-                "image_b64": base64.b64encode(jpg).decode('ascii')
-            })
-            self.client.publish(Config.TOPIC_IMG, payload)
-            log.info("Published image (%d bytes)", len(jpg))
-
-        except Exception as e:
-            log.error("Error in handle_image_request: %s", e, exc_info=True)
-
+    # --------------------------------------------------------------------------------------------
     def handle_led(self, msg):
         log.debug("handle_led payload=%s", msg.payload)
         p = safe_json(msg.payload)
@@ -223,9 +260,8 @@ class RobotController:
             log.info("Executed LED cmd '%s'", cmd)
         except Exception as e:
             log.error("LED handler error: %s", e, exc_info=True)
-            
-# ================================================================================================
 
+    # --------------------------------------------------------------------------------------------
     def handle_move(self, msg):
         log.debug("handle_move payload=%s", msg.payload)
         p = safe_json(msg.payload)
@@ -239,31 +275,41 @@ class RobotController:
 
         if dur is not None and dur > 0:
             def stop_and_notify():
-                move.drive(0, 0)
-                log.info("Auto-stopped motors")
-                # Notify server that move is complete:
-                payload = json.dumps({"timestamp": time.time()})
+                move.drive(0, 0)  # stop motors
+                log.info("Auto‑stopped motors")
+                
+                time.sleep(0.5) # sleep to avoid camera blur
+
+                # Re‑use helper utilities ↴
+                image_b64 = self.capture_image_b64()
+                dist      = self.get_distance_m()
+
+                payload = json.dumps({
+                    "timestamp": time.time(),
+                    "image_b64": image_b64,
+                    "distance_m": dist
+                })
                 self.client.publish(Config.TOPIC_MOVE_COMPLETE, payload)
-                log.debug("Published move complete")
+                log.debug("Published move complete with image & distance")
 
             threading.Timer(dur, stop_and_notify).start()
-    
-            
-# ================================================================================================
 
+    # --------------------------------------------------------------------------------------------
     def handle_distance_request(self):
         log.debug("handle_distance_request()")
-        try:
-            dist = ultra.get_filtered_distance()
-            payload = json.dumps({
-                "timestamp": time.time(),
-                "distance_m": dist
-            })
-            self.client.publish(Config.TOPIC_DIST, payload, qos=1)
-            log.info("Published distance: %s", dist)
-        except Exception as e:
-            log.error("Distance handler error: %s", e, exc_info=True)
+        dist = self.get_distance_m()
+        if dist is None:
+            log.error("Distance read failed – not publishing")
+            return
 
+        payload = json.dumps({
+            "timestamp": time.time(),
+            "distance_m": dist
+        })
+        self.client.publish(Config.TOPIC_DIST, payload, qos=1)
+        log.info("Published distance: %.3f m", dist)
+
+    # --------------------------------------------------------------------------------------------
     def handle_servo(self, msg):
         log.debug("handle_servo payload=%s", msg.payload)
         p = safe_json(msg.payload)
@@ -275,43 +321,39 @@ class RobotController:
         except Exception as e:
             log.error("Servo handler error: %s", e, exc_info=True)
 
+    # --------------------------------------------------------------------------------------------
     def handle_camera_calibration(self):
         """
-        Re‐run WB/AE calibration. Steps:
+        Re‐run WB/AE calibration:
         1) Log old EX/AG
-        2) Re-enable AWB, clear manual ExposureTime/Gain overrides so AE becomes auto again
+        2) Re‑enable AWB & clear AE overrides
         3) Wait 2 s for algorithms to converge
-        4) Read new ExposureTime & AnalogueGain from metadata
-        5) Disable AWB & AE (by overriding ExposureTime/Gain again)
-        6) Log new EX/AG
+        4) Read new values
+        5) Disable AWB/AE again (lock)
+        6) Log & publish new values
         """
-        # 1) Print old values
-        old_exp  = self.exp_time
-        old_gain = self.analog_gain
+        old_exp, old_gain = self.exp_time, self.analog_gain
         log.info("Camera calibration requested. Old EX=%dµs, AG=%.2f", old_exp, old_gain)
 
         try:
-            # 2) Re-enable AWB and clear manual overrides for ExposureTime/Gain
-            #    Setting ExposureTime=0 / AnalogueGain=0 tells libcamera "no override" → AE on
+            # 2) Enable auto
             self.picam2.set_controls({
                 "AwbEnable": True,
                 "ExposureTime": 0,
                 "AnalogueGain": 0
             })
-
-            # 3) Start camera so it runs in true auto‐exposure (AE) / auto‐whitebalance (AWB)
             self.picam2.start()
-            time.sleep(2.0)  # give AWB & AE time to converge
+            time.sleep(2.0)
 
-            # 4) Capture metadata (get newly‐settled values)
+            # 4) Capture new settings
             req = self.picam2.capture_request()
-            md = req.get_metadata()
+            md  = req.get_metadata()
             new_exp  = int(md.get("ExposureTime", 0))
             new_gain = md.get("AnalogueGain", 1.0)
             req.release()
             self.picam2.stop()
 
-            # 5) Lock in the new values (disable AWB & AE by overriding again)
+            # 5) Lock them in
             self.exp_time    = new_exp
             self.analog_gain = new_gain
             self.picam2.set_controls({
@@ -320,10 +362,8 @@ class RobotController:
                 "AnalogueGain": self.analog_gain
             })
 
-            # 6) Print new values
+            # 6) Log & publish
             log.info("Camera recalibrated. New EX=%dµs, AG=%.2f", self.exp_time, self.analog_gain)
-
-            # Optional: publish the new settings back to server
             payload = json.dumps({
                 "timestamp": time.time(),
                 "ExposureTime": self.exp_time,
@@ -335,11 +375,11 @@ class RobotController:
         except Exception as e:
             log.error("Error during camera recalibration: %s", e, exc_info=True)
 
+    # ============================================================================================
+    # Other internal loops / shutdown
+    # --------------------------------------------------------------------------------------------
     def heartbeat_loop(self):
-        """
-        Publishes a simple JSON heartbeat every self.heartbeat_interval seconds
-        so the server knows this client is alive.
-        """
+        """Publish a JSON heartbeat every self.heartbeat_interval seconds."""
         while True:
             try:
                 payload = json.dumps({"timestamp": time.time()})
@@ -349,6 +389,7 @@ class RobotController:
                 log.error("Failed to send heartbeat: %s", e, exc_info=True)
             time.sleep(self.heartbeat_interval)
 
+    # --------------------------------------------------------------------------------------------
     def shutdown(self):
         log.info("Shutting down…")
         try:
@@ -359,20 +400,17 @@ class RobotController:
 
         try:
             move.destroy()
-        except:
-            pass
+        except: pass
         try:
             self.pca.deinit()
-        except:
-            pass
+        except: pass
         try:
             ultra.GPIO.cleanup()
-        except:
-            pass
+        except: pass
 
         log.info("Clean exit")
 
-
+# ================================================================================================
 def main():
     controller = RobotController()
     controller.client.connect(Config.BROKER, Config.PORT, keepalive=60)
@@ -386,6 +424,6 @@ def main():
         controller.shutdown()
         sys.exit(0)
 
-
+# ================================================================================================
 if __name__ == "__main__":
     main()
